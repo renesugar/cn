@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -545,4 +546,44 @@ func generateRGWPortToUse() string {
 		}
 	}
 	return "notfound"
+}
+
+// GetFileType checks wether a specified data is directory, a block device or something else
+// function borrowed from https://github.com/andrewsykim/kubernetes/blob/2deb7af9b248a7ddc00e61fcd08aa9ea8d2d09cc/pkg/util/mount/mount_linux.go#L416
+func GetFileType(pathname string) (string, error) {
+	finfo, err := os.Stat(pathname)
+	if os.IsNotExist(err) {
+		return "notfound", fmt.Errorf("path %q does not exist", pathname)
+	}
+	// err in call to os.Stat
+	if err != nil {
+		return "error", err
+	}
+
+	mode := finfo.Sys().(*syscall.Stat_t).Mode
+	switch mode & syscall.S_IFMT {
+	case syscall.S_IFSOCK:
+		return "socket", nil
+	case syscall.S_IFBLK:
+		return "blockdev", nil
+	case syscall.S_IFCHR:
+		return "chardev", nil
+	case syscall.S_IFDIR:
+		return "directory", nil
+	case syscall.S_IFREG:
+		return "file", nil
+	}
+
+	return "error", fmt.Errorf("only recognize file, directory, socket, block device and character device")
+}
+
+// ListDevPartitions returns the number of partitions on a device
+func ListDevPartitions() int {
+	return 1
+}
+
+// SearchCephFiles searches for ceph files
+func SearchCephFiles() bool {
+	// activate.monmap  ceph_fsid  fsid  keyring  magic  type  whoami
+	return true
 }

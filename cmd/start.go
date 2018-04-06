@@ -15,6 +15,9 @@ import (
 var (
 	// PrivilegedContainer whether or not the container should run Privileged
 	PrivilegedContainer bool
+
+	// Data points to either the directory or drive to use to store Ceph's data
+	Data string
 )
 
 // CliClusterStart is the Cobra CLI call
@@ -31,6 +34,7 @@ func CliClusterStart() *cobra.Command {
 	cmd.Flags().SortFlags = false
 	cmd.Flags().StringVarP(&WorkingDirectory, "work-dir", "d", "/usr/share/ceph-nano", "Directory to work from")
 	cmd.Flags().StringVarP(&ImageName, "image", "i", "ceph/daemon", "USE AT YOUR OWN RISK. Ceph container image to use, format is 'username/image:tag'.")
+	cmd.Flags().StringVarP(&Data, "data", "b", "", "Configure Ceph Nano underlying storage with a specific directory or physical block device.")
 	cmd.Flags().BoolVar(&PrivilegedContainer, "privileged", false, "Starts the container in privileged mode")
 	cmd.Flags().BoolVar(&Help, "help", false, "help for start")
 
@@ -93,11 +97,42 @@ func runContainer(cmd *cobra.Command, args []string) {
 		"CEPH_DEMO_UID=" + CephNanoUID,
 		"NETWORK_AUTO_DETECT=4",
 		"CEPH_DAEMON=demo",
-		"DEMO_DAEMONS=mon,mgr,osd,rgw"}
+		"DEMO_DAEMONS=mon,mgr,osd,rgw",
+	}
+
+	volumeBindings := []string{
+		WorkingDirectory + ":" + TempPath,
+	}
 
 	ressources := container.Resources{
 		Memory:   536870912, // 512MB
 		NanoCPUs: 1,
+	}
+
+	volumes := map[string]struct{}{
+		"/etc/ceph":     struct{}{},
+		"/var/lib/ceph": struct{}{},
+	}
+
+	if len(Data) != 0 {
+		testDev, err := GetFileType(Data)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if testDev != "blockdev" && testDev != "directory" {
+			log.Fatalf("We only accept a directory or a block device, however the specified file type is a %s", testDev)
+		}
+		if testDev == "directory" {
+			envs = append(envs, "OSD_PATH="+Data)
+			volumeBindings = append(volumeBindings, Data+":"+Data)
+		}
+		if testDev == "blockdev" {
+			envs = append(envs, "OSD_DEVICE="+Data)
+			PrivilegedContainer = true
+			volumeBindings = append(volumeBindings, "/dev:/dev")
+			// place holder once 'demo' will use ceph-volume
+			// volumeBindings = append(volumeBindings, "/run/lvm/lvmetad.socket:/run/lvm/lvmetad.socket")
+		}
 	}
 
 	config := &container.Config{
@@ -105,15 +140,12 @@ func runContainer(cmd *cobra.Command, args []string) {
 		Hostname:     ContainerName + "-faa32aebf00b",
 		ExposedPorts: exposedPorts,
 		Env:          envs,
-		Volumes: map[string]struct{}{
-			"/etc/ceph":     struct{}{},
-			"/var/lib/ceph": struct{}{},
-		},
+		Volumes:      volumes,
 	}
 
 	hostConfig := &container.HostConfig{
 		PortBindings: portBindings,
-		Binds:        []string{WorkingDirectory + ":" + TempPath},
+		Binds:        volumeBindings,
 		Resources:    ressources,
 		Privileged:   PrivilegedContainer,
 	}
